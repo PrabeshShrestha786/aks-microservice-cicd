@@ -1,0 +1,57 @@
+name: CI-CD to AKS
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set image tag
+        id: meta
+        run: |
+          IMAGE="${{ secrets.ACR_LOGIN_SERVER }}/webapp:${GITHUB_SHA}"
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
+
+      - name: Docker login to ACR
+        run: |
+          echo "${{ secrets.ACR_PASSWORD }}" | docker login ${{ secrets.ACR_LOGIN_SERVER }} \
+            -u "${{ secrets.ACR_USERNAME }}" --password-stdin
+
+      - name: Build image
+        run: |
+          docker build -t "${{ steps.meta.outputs.image }}" ./app
+
+      - name: Push image
+        run: |
+          docker push "${{ steps.meta.outputs.image }}"
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG }}" > ~/.kube/config
+
+      - name: Deploy to AKS
+        run: |
+          IMAGE="${{ needs.build-and-push.outputs.image }}"
+          sed "s|REPLACE_IMAGE|$IMAGE|g" k8s/deployment.yaml | kubectl apply -f -
+          kubectl apply -f k8s/service.yaml
+
+      - name: Verify rollout
+        run: |
+          kubectl rollout status deployment/webapp --timeout=180s
+          kubectl get pods -o wide
+          kubectl get svc webapp
