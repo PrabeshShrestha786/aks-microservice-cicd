@@ -4,63 +4,59 @@ on:
   push:
     branches: ["main"]
 
+env:
+  IMAGE_NAME: webapp
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    outputs:
-      image: ${{ steps.meta.outputs.image }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set image tag
-        id: meta
-        shell: bash
         run: |
-          IMAGE="${{ secrets.ACR_LOGIN_SERVER }}/webapp:${GITHUB_SHA}"
-          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
-          echo "IMAGE=$IMAGE"
+          echo "IMAGE=${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${GITHUB_SHA}" >> $GITHUB_ENV
 
       - name: Docker login to ACR
-        shell: bash
         run: |
-          echo "${{ secrets.ACR_PASSWORD }}" | docker login "${{ secrets.ACR_LOGIN_SERVER }}" \
+          echo "${{ secrets.ACR_PASSWORD }}" | docker login ${{ secrets.ACR_LOGIN_SERVER }} \
             -u "${{ secrets.ACR_USERNAME }}" --password-stdin
 
       - name: Build image
-        shell: bash
         run: |
-          docker build -t "${{ steps.meta.outputs.image }}" ./app
+          docker build -t $IMAGE ./app
 
       - name: Push image
-        shell: bash
         run: |
-          docker push "${{ steps.meta.outputs.image }}"
+          docker push $IMAGE
 
   deploy:
     runs-on: ubuntu-latest
     needs: build-and-push
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set image tag
+        run: |
+          echo "IMAGE=${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${GITHUB_SHA}" >> $GITHUB_ENV
+
       - name: Setup kubeconfig
-        shell: bash
         run: |
           mkdir -p ~/.kube
           echo "${{ secrets.KUBECONFIG }}" > ~/.kube/config
 
       - name: Deploy to AKS
-        shell: bash
         run: |
-          IMAGE="${{ needs.build-and-push.outputs.image }}"
-          echo "Deploying IMAGE=$IMAGE"
+          echo "Deploying $IMAGE"
           sed "s|REPLACE_IMAGE|$IMAGE|g" k8s/deployment.yaml | kubectl apply -f -
           kubectl apply -f k8s/service.yaml
 
       - name: Verify rollout
-        shell: bash
         run: |
           kubectl rollout status deployment/webapp --timeout=180s
-          kubectl get pods -o wide
+          kubectl get pods
           kubectl get svc webapp
